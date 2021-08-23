@@ -1,10 +1,11 @@
 use cosmwasm_std::{
-    entry_point, to_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
+    attr, entry_point, to_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Decimal, Deps, DepsMut,
+    Env, MessageInfo, Response, StdResult,
 };
 
 use crate::error::ContractError;
-use crate::msg::{CountResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
-use crate::state::{State, STATE};
+use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, SplitsResponse};
+use crate::state::{Split, State, STATE};
 
 // Note, you can use StdResult in some functions where you do not
 // make use of the custom errors
@@ -12,12 +13,14 @@ use crate::state::{State, STATE};
 pub fn instantiate(
     deps: DepsMut,
     _env: Env,
-    info: MessageInfo,
+    _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    let total_weight = msg.splits.iter().fold(0, |acc, s| acc + s.weight);
+
     let state = State {
-        count: msg.count,
-        owner: info.sender,
+        splits: msg.splits,
+        total_weight,
     };
     STATE.save(deps.storage, &state)?;
 
@@ -28,46 +31,74 @@ pub fn instantiate(
 #[entry_point]
 pub fn execute(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Increment {} => try_increment(deps),
-        ExecuteMsg::Reset { count } => try_reset(deps, info, count),
+        ExecuteMsg::Payout {} => execute_payout(deps, env, info), // v1
     }
 }
 
-pub fn try_increment(deps: DepsMut) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        state.count += 1;
-        Ok(state)
-    })?;
+fn execute_payout(deps: DepsMut, env: Env, _info: MessageInfo) -> Result<Response, ContractError> {
+    let state = STATE.load(deps.storage)?;
+    let splits = state.splits;
+    let total_weight = state.total_weight;
 
-    Ok(Response::default())
+    let balance = deps.querier.query_all_balances(&env.contract.address)?;
+    let messages = send_tokens(&splits, balance, total_weight)?;
+
+    let attributes = vec![
+        attr("action", "approve"),
+        // attr("id", "123"),
+        // attr("to", split.addr.clone()),
+    ];
+
+    Ok(Response {
+        submessages: vec![],
+        messages,
+        attributes,
+        data: None,
+    })
 }
 
-pub fn try_reset(deps: DepsMut, info: MessageInfo, count: i32) -> Result<Response, ContractError> {
-    STATE.update(deps.storage, |mut state| -> Result<_, ContractError> {
-        if info.sender != state.owner {
-            return Err(ContractError::Unauthorized {});
-        }
-        state.count = count;
-        Ok(state)
-    })?;
-    Ok(Response::default())
+fn send_tokens(
+    splits: &Vec<Split>,
+    balance: Vec<Coin>,
+    total_weight: u64,
+) -> StdResult<Vec<CosmosMsg>> {
+    // TODO: support more than a single coin?
+    let coin = balance.get(0).unwrap();
+
+    let msgs = splits
+        .iter()
+        .map(|s| {
+            let percentage: Decimal = Decimal::from_ratio(s.weight, total_weight);
+            let count = coin.amount * percentage;
+            let amount = vec![Coin::new(count.u128(), &coin.denom)];
+            let send = BankMsg::Send {
+                to_address: s.addr.to_string(),
+                amount,
+            };
+            send.into()
+        })
+        .collect();
+
+    Ok(msgs)
 }
 
 #[entry_point]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetCount {} => to_binary(&query_count(deps)?),
+        QueryMsg::GetSplits {} => to_binary(&query_splits(deps)?),
     }
 }
 
-fn query_count(deps: Deps) -> StdResult<CountResponse> {
+fn query_splits(deps: Deps) -> StdResult<SplitsResponse> {
     let state = STATE.load(deps.storage)?;
-    Ok(CountResponse { count: state.count })
+    Ok(SplitsResponse {
+        splits: state.splits,
+    })
 }
 
 #[cfg(test)]
@@ -79,8 +110,15 @@ mod tests {
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies(&[]);
+        let one = Split {
+            addr: Addr::unchecked("asdf"),
+            weight: 1,
+        };
 
-        let msg = InstantiateMsg { count: 17 };
+        let msg = InstantiateMsg {
+            splits: vec![one.clone()],
+        };
+
         let info = mock_info("creator", &coins(1000, "earth"));
 
         // we can just call .unwrap() to assert this was a success
@@ -88,55 +126,92 @@ mod tests {
         assert_eq!(0, res.messages.len());
 
         // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(17, value.count);
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetSplits {}).unwrap();
+        let value: SplitsResponse = from_binary(&res).unwrap();
+        assert_eq!(1, value.splits.len());
+        let query_one = value.splits.get(0).unwrap();
+        assert_eq!(one.weight, query_one.weight);
+        assert_eq!(one.addr.to_string(), query_one.addr.to_string());
     }
 
     #[test]
-    fn increment() {
-        let mut deps = mock_dependencies(&coins(2, "token"));
+    fn send_one() {
+        let mut deps = mock_dependencies(&coins(1000, "token"));
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+        let one = Split {
+            addr: Addr::unchecked("asdf"),
+            weight: 1,
+        };
+
+        let msg = InstantiateMsg { splits: vec![one] };
+        let info = mock_info("creator", &coins(1000, "token"));
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         // beneficiary can release it
-        let info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Increment {};
-        let _res = execute(deps.as_mut(), mock_env(), info, msg).unwrap();
+        let info = mock_info("anyone", &coins(1000, "token"));
+        let msg = ExecuteMsg::Payout {};
+        let _res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
 
-        // should increase counter by 1
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(18, value.count);
+        // complete release by verfier, before expiration
+        let env = mock_env();
+        let info = mock_info("verifies", &[]);
+        let execute_res = execute(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(1, execute_res.messages.len());
+        let msg: &CosmosMsg = execute_res.messages.get(0).expect("no message");
+        assert_eq!(
+            msg,
+            &CosmosMsg::Bank(BankMsg::Send {
+                to_address: String::from("asdf"),
+                amount: coins(1000, "token"),
+            })
+        );
     }
 
     #[test]
-    fn reset() {
-        let mut deps = mock_dependencies(&coins(2, "token"));
+    fn send_two() {
+        let mut deps = mock_dependencies(&coins(1000, "token"));
 
-        let msg = InstantiateMsg { count: 17 };
-        let info = mock_info("creator", &coins(2, "token"));
+        let one = Split {
+            addr: Addr::unchecked("asdf"),
+            weight: 1,
+        };
+        let two = Split {
+            addr: Addr::unchecked("jkl"),
+            weight: 1,
+        };
+
+        let msg = InstantiateMsg {
+            splits: vec![one, two],
+        };
+        let info = mock_info("creator", &coins(1000, "token"));
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         // beneficiary can release it
-        let unauth_info = mock_info("anyone", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let res = execute(deps.as_mut(), mock_env(), unauth_info, msg);
-        match res {
-            Err(ContractError::Unauthorized {}) => {}
-            _ => panic!("Must return unauthorized error"),
-        }
+        let info = mock_info("anyone", &coins(1000, "token"));
+        let msg = ExecuteMsg::Payout {};
+        let _res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
 
-        // only the original creator can reset the counter
-        let auth_info = mock_info("creator", &coins(2, "token"));
-        let msg = ExecuteMsg::Reset { count: 5 };
-        let _res = execute(deps.as_mut(), mock_env(), auth_info, msg).unwrap();
+        // complete release by verfier, before expiration
+        let env = mock_env();
+        let info = mock_info("verifies", &[]);
+        let execute_res = execute(deps.as_mut(), env, info, msg).unwrap();
+        assert_eq!(2, execute_res.messages.len());
+        let msg: &CosmosMsg = execute_res.messages.get(0).expect("no message");
+        assert_eq!(
+            msg,
+            &CosmosMsg::Bank(BankMsg::Send {
+                to_address: String::from("asdf"),
+                amount: coins(500, "token"),
+            })
+        );
 
-        // should now be 5
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetCount {}).unwrap();
-        let value: CountResponse = from_binary(&res).unwrap();
-        assert_eq!(5, value.count);
+        let msg2: &CosmosMsg = execute_res.messages.get(1).expect("no message");
+        assert_eq!(
+            msg2,
+            &CosmosMsg::Bank(BankMsg::Send {
+                to_address: String::from("jkl"),
+                amount: coins(500, "token"),
+            })
+        );
     }
 }
