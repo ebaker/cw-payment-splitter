@@ -40,26 +40,30 @@ pub fn execute(
     }
 }
 
-fn execute_payout(deps: DepsMut, env: Env, _info: MessageInfo) -> Result<Response, ContractError> {
-    let state = STATE.load(deps.storage)?;
-    let splits = state.splits;
-    let total_weight = state.total_weight;
+fn execute_payout(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+    if !can_execute(deps.as_ref(), info.sender.as_ref())? {
+        Err(ContractError::Unauthorized {})
+    } else {
+        let state = STATE.load(deps.storage)?;
+        let splits = state.splits;
+        let total_weight = state.total_weight;
 
-    let balance = deps.querier.query_all_balances(&env.contract.address)?;
-    let messages = send_tokens(&splits, balance, total_weight)?;
+        let balance = deps.querier.query_all_balances(&env.contract.address)?;
+        let messages = send_tokens(&splits, balance, total_weight)?;
 
-    let attributes = vec![
-        attr("action", "approve"),
-        // attr("id", "123"),
-        // attr("to", split.addr.clone()),
-    ];
+        let attributes = vec![
+            attr("action", "approve"),
+            // attr("id", "123"),
+            // attr("to", split.addr.clone()),
+        ];
 
-    Ok(Response {
-        submessages: vec![],
-        messages,
-        attributes,
-        data: None,
-    })
+        Ok(Response {
+            submessages: vec![],
+            messages,
+            attributes,
+            data: None,
+        })
+    }
 }
 
 fn send_tokens(
@@ -85,6 +89,13 @@ fn send_tokens(
         .collect();
 
     Ok(msgs)
+}
+
+fn can_execute(deps: Deps, addr: &str) -> StdResult<bool> {
+    let state = STATE.load(deps.storage)?;
+    let splits = state.splits;
+    let can = splits.iter().any(|s| s.addr.as_ref() == addr);
+    Ok(can)
 }
 
 #[entry_point]
@@ -148,13 +159,13 @@ mod tests {
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         // beneficiary can release it
-        let info = mock_info("anyone", &coins(1000, "token"));
+        let info = mock_info("asdf", &coins(1000, "token"));
         let msg = ExecuteMsg::Payout {};
         let _res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
 
         // complete release by verfier, before expiration
         let env = mock_env();
-        let info = mock_info("verifies", &[]);
+        let info = mock_info("asdf", &[]);
         let execute_res = execute(deps.as_mut(), env, info, msg).unwrap();
         assert_eq!(1, execute_res.messages.len());
         let msg: &CosmosMsg = execute_res.messages.get(0).expect("no message");
@@ -165,6 +176,27 @@ mod tests {
                 amount: coins(1000, "token"),
             })
         );
+    }
+
+    #[test]
+    fn block_nonsplit_address() {
+        let mut deps = mock_dependencies(&coins(1000, "token"));
+
+        let one = Split {
+            addr: Addr::unchecked("asdf"),
+            weight: 1,
+        };
+
+        let msg = InstantiateMsg { splits: vec![one] };
+        let info = mock_info("creator", &coins(1000, "token"));
+        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
+
+        // beneficiary can release itlet env = mock_env();
+        let env = mock_env();
+        let info = mock_info("blocked", &coins(1000, "token"));
+        let msg = ExecuteMsg::Payout {};
+        let err = execute(deps.as_mut(), env, info, msg).unwrap_err();
+        assert!(matches!(err, ContractError::Unauthorized {}));
     }
 
     #[test]
@@ -187,13 +219,13 @@ mod tests {
         let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
 
         // beneficiary can release it
-        let info = mock_info("anyone", &coins(1000, "token"));
+        let info = mock_info("jkl", &coins(1000, "token"));
         let msg = ExecuteMsg::Payout {};
         let _res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
 
         // complete release by verfier, before expiration
         let env = mock_env();
-        let info = mock_info("verifies", &[]);
+        let info = mock_info("jkl", &[]);
         let execute_res = execute(deps.as_mut(), env, info, msg).unwrap();
         assert_eq!(2, execute_res.messages.len());
         let msg: &CosmosMsg = execute_res.messages.get(0).expect("no message");
