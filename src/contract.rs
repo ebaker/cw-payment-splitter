@@ -1,11 +1,11 @@
 use cosmwasm_std::{
-    attr, entry_point, to_binary, Addr, BankMsg, Binary, Coin, CosmosMsg, Decimal, Deps, DepsMut,
-    Env, MessageInfo, Response, StdResult,
+    attr, coins, entry_point, to_binary, Addr, Api, BankMsg, Binary, Coin, CosmosMsg, Decimal,
+    Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128,
 };
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, SplitsResponse};
-use crate::state::{Split, State, STATE};
+use crate::msg::{ExecuteMsg, InstantiateMsg, PayeesResponse, QueryMsg};
+use crate::state::{State, RELEASED, SHARES, STATE};
 
 // Note, you can use StdResult in some functions where you do not
 // make use of the custom errors
@@ -16,15 +16,39 @@ pub fn instantiate(
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    let total_weight = msg.splits.iter().fold(0, |acc, s| acc + s.weight);
+    let length = msg.payees.len();
+
+    if msg.shares.len() != length {
+        return Err(ContractError::InvalidLength {});
+    }
+
+    let payees = map_validate(deps.api, &msg.payees)?;
+
+    for index in 0..length {
+        let payee = payees.get(index).unwrap();
+
+        if msg.shares[index] < 1 {
+            return Err(ContractError::InvalidShares {});
+        }
+
+        SHARES.save(deps.storage, payee, &Uint128::new(msg.shares[index].into()));
+        RELEASED.save(deps.storage, payee, &Uint128::zero());
+    }
+
+    let total_shares = msg.shares.iter().fold(0, |acc, s| acc + s);
 
     let state = State {
-        splits: msg.splits,
-        total_weight,
+        total_shares,
+        total_released: Uint128::new(0),
+        payees,
     };
     STATE.save(deps.storage, &state)?;
 
     Ok(Response::default())
+}
+
+pub fn map_validate(api: &dyn Api, addrs: &[String]) -> StdResult<Vec<Addr>> {
+    addrs.iter().map(|addr| api.addr_validate(&addr)).collect()
 }
 
 // And declare a custom Error variant for the ones where you will want to make use of it
@@ -36,84 +60,73 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Payout {} => execute_payout(deps, env, info), // v1
+        ExecuteMsg::Release {} => execute_release(deps, env, info), // v1
     }
 }
 
-fn execute_payout(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+fn execute_release(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+    let state = STATE.load(deps.storage)?;
+
     if !can_execute(deps.as_ref(), info.sender.as_ref())? {
         Err(ContractError::Unauthorized {})
     } else {
-        let state = STATE.load(deps.storage)?;
-        let splits = state.splits;
-        let total_weight = state.total_weight;
+        let account = info.sender;
+        let shares = SHARES.load(deps.storage, &account)?;
+        let released = RELEASED.load(deps.storage, &account)?;
+
+        let total_shares = state.total_shares;
+        let total_released = state.total_released;
 
         let balance = deps.querier.query_all_balances(&env.contract.address)?;
-        let messages = send_tokens(&splits, balance, total_weight)?;
+        let native_balance = balance.get(0).unwrap();
+        let total_received = native_balance.amount + total_released;
+        let denom = native_balance.denom.clone();
 
-        let attributes = vec![
-            attr("action", "approve"),
-            // attr("id", "123"),
-            // attr("to", split.addr.clone()),
-        ];
+        let amount = shares
+            .checked_mul(total_received)
+            .unwrap()
+            .checked_div(released.checked_sub(Uint128::from(total_shares)).unwrap())
+            .unwrap();
 
-        Ok(Response {
-            submessages: vec![],
-            messages,
-            attributes,
-            data: None,
-        })
+        let send = BankMsg::Send {
+            to_address: account.to_string(),
+            amount: coins(amount.u128(), denom),
+        };
+
+        let mut res = Response::new();
+        res.add_attribute("action", "approve");
+        res.add_message(send);
+        Ok(
+            res, // .add_messages(vec![send])
+        )
     }
-}
-
-fn send_tokens(
-    splits: &Vec<Split>,
-    balance: Vec<Coin>,
-    total_weight: u64,
-) -> StdResult<Vec<CosmosMsg>> {
-    // TODO: support more than a single coin?
-    let coin = balance.get(0).unwrap();
-
-    let msgs = splits
-        .iter()
-        .map(|s| {
-            let percentage: Decimal = Decimal::from_ratio(s.weight, total_weight);
-            let count = coin.amount * percentage;
-            let amount = vec![Coin::new(count.u128(), &coin.denom)];
-            let send = BankMsg::Send {
-                to_address: s.addr.to_string(),
-                amount,
-            };
-            send.into()
-        })
-        .collect();
-
-    Ok(msgs)
 }
 
 fn can_execute(deps: Deps, addr: &str) -> StdResult<bool> {
     let state = STATE.load(deps.storage)?;
-    let splits = state.splits;
-    let can = splits.iter().any(|s| s.addr.as_ref() == addr);
+    let payees = &state.payees;
+    let can = payees.iter().any(|s| s.as_ref() == addr);
     Ok(can)
 }
 
 #[entry_point]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
-        QueryMsg::GetSplits {} => to_binary(&query_splits(deps)?),
+        QueryMsg::GetPayees {} => to_binary(&query_payees(deps)?),
     }
 }
 
-fn query_splits(deps: Deps) -> StdResult<SplitsResponse> {
+fn query_payees(deps: Deps) -> StdResult<PayeesResponse> {
     let state = STATE.load(deps.storage)?;
-    Ok(SplitsResponse {
-        splits: state.splits,
+    Ok(PayeesResponse {
+        payees: state.payees.into_iter().map(|a| a.into()).collect(),
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::msg::PayeesResponse;
+
     use super::*;
     use cosmwasm_std::testing::{mock_dependencies, mock_env, mock_info};
     use cosmwasm_std::{coins, from_binary};
@@ -121,13 +134,11 @@ mod tests {
     #[test]
     fn proper_initialization() {
         let mut deps = mock_dependencies(&[]);
-        let one = Split {
-            addr: Addr::unchecked("asdf"),
-            weight: 1,
-        };
+        let one = String::from("one");
 
         let msg = InstantiateMsg {
-            splits: vec![one.clone()],
+            payees: vec![String::from(&one)],
+            shares: vec![1],
         };
 
         let info = mock_info("creator", &coins(1000, "earth"));
@@ -137,113 +148,10 @@ mod tests {
         assert_eq!(0, res.messages.len());
 
         // it worked, let's query the state
-        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetSplits {}).unwrap();
-        let value: SplitsResponse = from_binary(&res).unwrap();
-        assert_eq!(1, value.splits.len());
-        let query_one = value.splits.get(0).unwrap();
-        assert_eq!(one.weight, query_one.weight);
-        assert_eq!(one.addr.to_string(), query_one.addr.to_string());
-    }
-
-    #[test]
-    fn send_one() {
-        let mut deps = mock_dependencies(&coins(1000, "token"));
-
-        let one = Split {
-            addr: Addr::unchecked("asdf"),
-            weight: 1,
-        };
-
-        let msg = InstantiateMsg { splits: vec![one] };
-        let info = mock_info("creator", &coins(1000, "token"));
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // beneficiary can release it
-        let info = mock_info("asdf", &coins(1000, "token"));
-        let msg = ExecuteMsg::Payout {};
-        let _res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
-
-        // complete release by verfier, before expiration
-        let env = mock_env();
-        let info = mock_info("asdf", &[]);
-        let execute_res = execute(deps.as_mut(), env, info, msg).unwrap();
-        assert_eq!(1, execute_res.messages.len());
-        let msg: &CosmosMsg = execute_res.messages.get(0).expect("no message");
-        assert_eq!(
-            msg,
-            &CosmosMsg::Bank(BankMsg::Send {
-                to_address: String::from("asdf"),
-                amount: coins(1000, "token"),
-            })
-        );
-    }
-
-    #[test]
-    fn block_nonsplit_address() {
-        let mut deps = mock_dependencies(&coins(1000, "token"));
-
-        let one = Split {
-            addr: Addr::unchecked("asdf"),
-            weight: 1,
-        };
-
-        let msg = InstantiateMsg { splits: vec![one] };
-        let info = mock_info("creator", &coins(1000, "token"));
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // beneficiary can release itlet env = mock_env();
-        let env = mock_env();
-        let info = mock_info("blocked", &coins(1000, "token"));
-        let msg = ExecuteMsg::Payout {};
-        let err = execute(deps.as_mut(), env, info, msg).unwrap_err();
-        assert!(matches!(err, ContractError::Unauthorized {}));
-    }
-
-    #[test]
-    fn send_two() {
-        let mut deps = mock_dependencies(&coins(1000, "token"));
-
-        let one = Split {
-            addr: Addr::unchecked("asdf"),
-            weight: 1,
-        };
-        let two = Split {
-            addr: Addr::unchecked("jkl"),
-            weight: 1,
-        };
-
-        let msg = InstantiateMsg {
-            splits: vec![one, two],
-        };
-        let info = mock_info("creator", &coins(1000, "token"));
-        let _res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap();
-
-        // beneficiary can release it
-        let info = mock_info("jkl", &coins(1000, "token"));
-        let msg = ExecuteMsg::Payout {};
-        let _res = execute(deps.as_mut(), mock_env(), info, msg.clone()).unwrap();
-
-        // complete release by verfier, before expiration
-        let env = mock_env();
-        let info = mock_info("jkl", &[]);
-        let execute_res = execute(deps.as_mut(), env, info, msg).unwrap();
-        assert_eq!(2, execute_res.messages.len());
-        let msg: &CosmosMsg = execute_res.messages.get(0).expect("no message");
-        assert_eq!(
-            msg,
-            &CosmosMsg::Bank(BankMsg::Send {
-                to_address: String::from("asdf"),
-                amount: coins(500, "token"),
-            })
-        );
-
-        let msg2: &CosmosMsg = execute_res.messages.get(1).expect("no message");
-        assert_eq!(
-            msg2,
-            &CosmosMsg::Bank(BankMsg::Send {
-                to_address: String::from("jkl"),
-                amount: coins(500, "token"),
-            })
-        );
+        let res = query(deps.as_ref(), mock_env(), QueryMsg::GetPayees {}).unwrap();
+        let value: PayeesResponse = from_binary(&res).unwrap();
+        assert_eq!(1, value.payees.len());
+        let query_one = value.payees.get(0).unwrap();
+        assert_eq!(query_one.as_str(), one);
     }
 }

@@ -1,21 +1,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use cosmwasm_std::Addr;
-use cw_storage_plus::Item;
-
-// we cast a ballot with our chosen vote and a given weight
-// stored under the key that voted
-#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
-pub struct Split {
-    pub weight: u64,
-    pub addr: Addr,
-}
+use cosmwasm_std::{Addr, Uint128};
+use cw_storage_plus::{Item, Map};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct State {
-    pub total_weight: u64,
-    pub splits: Vec<Split>,
+    pub total_released: Uint128,
+    pub total_shares: u64,
+    pub payees: Vec<Addr>,
 }
 
 pub const STATE: Item<State> = Item::new("state");
+pub const SHARES: Map<&Addr, Uint128> = Map::new("shares");
+pub const RELEASED: Map<&Addr, Uint128> = Map::new("released");
