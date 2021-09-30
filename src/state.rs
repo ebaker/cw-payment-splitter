@@ -12,5 +12,5 @@ pub struct State {
 }
 
 pub const STATE: Item<State> = Item::new("state");
-pub const SHARES: Map<&Addr, Uint128> = Map::new("shares");
+pub const SHARES: Map<&Addr, u64> = Map::new("shares");
 pub const RELEASED: Map<&Addr, Uint128> = Map::new("released");

@@ -4,7 +4,9 @@ use cosmwasm_std::{
 };
 
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, InstantiateMsg, PayeesResponse, QueryMsg, ReleasedResponse};
+use crate::msg::{
+    ExecuteMsg, InstantiateMsg, PayeesResponse, QueryMsg, ReleasedResponse, SharesResponse,
+};
 use crate::state::{State, RELEASED, SHARES, STATE};
 
 // Note, you can use StdResult in some functions where you do not
@@ -31,7 +33,7 @@ pub fn instantiate(
             return Err(ContractError::InvalidShares {});
         }
 
-        SHARES.save(deps.storage, payee, &Uint128::new(msg.shares[index].into()))?;
+        SHARES.save(deps.storage, payee, &msg.shares[index].into())?;
         RELEASED.save(deps.storage, payee, &Uint128::zero())?;
     }
 
@@ -87,8 +89,8 @@ fn execute_release(
         let total_received = native_balance.amount + total_released;
         let denom = native_balance.denom.clone();
 
-        let amount = shares
-            .checked_mul(total_received)
+        let amount = total_received
+            .checked_mul(Uint128::from(shares))
             .unwrap()
             .checked_div(Uint128::from(total_shares))
             .unwrap()
@@ -126,6 +128,7 @@ fn can_release(deps: Deps, addr: &str) -> StdResult<bool> {
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::GetPayees {} => to_binary(&query_payees(deps)?),
+        QueryMsg::GetShares { address } => to_binary(&query_shares(deps, address)?),
         QueryMsg::GetReleased { address } => to_binary(&query_released(deps, address)?),
     }
 }
@@ -135,6 +138,12 @@ fn query_payees(deps: Deps) -> StdResult<PayeesResponse> {
     Ok(PayeesResponse {
         payees: state.payees.into_iter().map(|a| a.into()).collect(),
     })
+}
+
+fn query_shares(deps: Deps, address: String) -> StdResult<SharesResponse> {
+    let addr = deps.api.addr_validate(&address)?;
+    let shares = SHARES.load(deps.storage, &addr)?;
+    Ok(SharesResponse { shares })
 }
 
 fn query_released(deps: Deps, address: String) -> StdResult<ReleasedResponse> {
@@ -173,6 +182,31 @@ mod tests {
         assert_eq!(1, value.payees.len());
         let query_one = value.payees.get(0).unwrap();
         assert_eq!(query_one.as_str(), one);
+        let res = query(
+            deps.as_ref(),
+            mock_env(),
+            QueryMsg::GetShares { address: one },
+        )
+        .unwrap();
+        let value: SharesResponse = from_binary(&res).unwrap();
+        assert_eq!(1, value.shares);
+    }
+
+    #[test]
+    fn invalid_shares() {
+        let mut deps = mock_dependencies(&[]);
+        let one = String::from("one");
+
+        let msg = InstantiateMsg {
+            payees: vec![String::from(&one)],
+            shares: vec![0],
+        };
+
+        let info = mock_info("creator", &coins(1000, "earth"));
+
+        // we can just call .unwrap() to assert this was a success
+        let res = instantiate(deps.as_mut(), mock_env(), info, msg).unwrap_err();
+        assert!(matches!(res, ContractError::InvalidShares {}));
     }
 
     #[test]
@@ -236,7 +270,7 @@ mod tests {
         let one_shares = 1;
 
         let two = String::from("jkl");
-        let two_shares = 1;
+        let two_shares = 3;
 
         let msg = InstantiateMsg {
             payees: vec![one.clone(), two.clone()],
@@ -258,15 +292,19 @@ mod tests {
             msg,
             &CosmosMsg::Bank(BankMsg::Send {
                 to_address: two.clone(),
-                amount: coins(500, "token"),
+                amount: coins(750, "token"),
             })
         );
 
         assert_eq!(
             query_released(deps.as_ref(), two.clone()).unwrap(),
             ReleasedResponse {
-                released: Uint128::new(500)
+                released: Uint128::new(750)
             }
+        );
+        assert_eq!(
+            query_shares(deps.as_ref(), two.clone()).unwrap(),
+            SharesResponse { shares: 3 }
         );
 
         // check no more can be released
@@ -289,15 +327,19 @@ mod tests {
             msg,
             &CosmosMsg::Bank(BankMsg::Send {
                 to_address: one.clone(),
-                amount: coins(500, "token"),
+                amount: coins(250, "token"),
             })
         );
 
         assert_eq!(
             query_released(deps.as_ref(), one.clone()).unwrap(),
             ReleasedResponse {
-                released: Uint128::new(500)
+                released: Uint128::new(250)
             }
+        );
+        assert_eq!(
+            query_shares(deps.as_ref(), one.clone()).unwrap(),
+            SharesResponse { shares: 1 }
         );
 
         // check no more can be released

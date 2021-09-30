@@ -12,17 +12,17 @@ pub struct InstantiateMsg {
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
     Release { address: String },
-    // v0.1
+    // v0.1.0
     // - [x] use Map to check if address in split
     // - [x] message to release funds for account
 
-    // for v0.2
+    // for v0.1.1
     // - [ ] remaining query messages below
 
-    // for v0.3
+    // for v0.1.2
     // - [ ] account can remove themselves
 
-    // for v0.4
+    // for v0.1.3
     // - [ ] support cw20
 }
 
@@ -31,19 +31,22 @@ pub enum ExecuteMsg {
 pub enum QueryMsg {
     // GetTotalShares{},
     // GetTotalReleased{},
-    // GetShares{},
+    GetShares { address: String },
     GetReleased { address: String },
     GetPayees {},
 }
 
-// // We define a custom struct for each query response
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PayeesResponse {
     pub payees: Vec<String>,
 }
 
-// // We define a custom struct for each query response
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ReleasedResponse {
     pub released: Uint128,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct SharesResponse {
+    pub shares: u64,
 }
