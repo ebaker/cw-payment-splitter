@@ -15,9 +15,7 @@ pub enum ExecuteMsg {
     // v0.1.0
     // - [x] use Map to check if address in split
     // - [x] message to release funds for account
-
-    // for v0.1.1
-    // - [ ] remaining query messages below
+    // - [x] total shares & total released query messages
 
     // for v0.1.2
     // - [ ] account can remove themselves
@@ -29,8 +27,8 @@ pub enum ExecuteMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
-    // GetTotalShares{},
-    // GetTotalReleased{},
+    GetTotalShares {},
+    GetTotalReleased {},
     GetShares { address: String },
     GetReleased { address: String },
     GetPayees {},
