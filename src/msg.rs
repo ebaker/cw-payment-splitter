@@ -1,5 +1,4 @@
-use crate::state::State;
-// use cosmwasm_std::Addr;
+use cosmwasm_std::Uint128;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -12,26 +11,28 @@ pub struct InstantiateMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    Release {},
-    // v1
-    // - anyone inside split can execute payout
-    // - use map to check if address in split
+    Release { address: String },
+    // v0.1
+    // - [x] use Map to check if address in split
+    // - [x] message to release funds for account
 
-    // v2 UpdateSplit
-    // v2 Recieve for cw20
-    // v2 "Automatically" Payout
-    // - maybe change Payout to Claim:
-    //   allowing users in the split to claim their portion
+    // for v0.2
+    // - [ ] remaining query messages below
+
+    // for v0.3
+    // - [ ] account can remove themselves
+
+    // for v0.4
+    // - [ ] support cw20
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum QueryMsg {
-    // GetCount returns the current count as a json-encoded number
     // GetTotalShares{},
     // GetTotalReleased{},
     // GetShares{},
-    // GetReleased{},
+    GetReleased { address: String },
     GetPayees {},
 }
 
@@ -39,4 +40,10 @@ pub enum QueryMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct PayeesResponse {
     pub payees: Vec<String>,
+}
+
+// // We define a custom struct for each query response
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct ReleasedResponse {
+    pub released: Uint128,
 }
