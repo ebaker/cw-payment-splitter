@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     coins, entry_point, to_binary, Addr, Api, BankMsg, Binary, Deps, DepsMut, Env, MessageInfo,
-    Response, StdResult, Uint128,
+    Response, StdError, StdResult, Uint128,
 };
 
 use crate::error::ContractError;
@@ -9,8 +9,6 @@ use crate::msg::{
 };
 use crate::state::{PAYEES, RELEASED, SHARES, TOTAL_RELEASED, TOTAL_SHARES};
 
-// Note, you can use StdResult in some functions where you do not
-// make use of the custom errors
 #[entry_point]
 pub fn instantiate(
     deps: DepsMut,
@@ -27,14 +25,14 @@ pub fn instantiate(
     let payees = map_validate(deps.api, &msg.payees)?;
 
     for index in 0..length {
-        let payee = payees.get(index).unwrap();
+        if let Some(payee) = payees.get(index) {
+            if msg.shares[index] < 1 {
+                return Err(ContractError::InvalidShares {});
+            }
 
-        if msg.shares[index] < 1 {
-            return Err(ContractError::InvalidShares {});
+            SHARES.save(deps.storage, payee, &msg.shares[index])?;
+            RELEASED.save(deps.storage, payee, &Uint128::zero())?;
         }
-
-        SHARES.save(deps.storage, payee, &msg.shares[index])?;
-        RELEASED.save(deps.storage, payee, &Uint128::zero())?;
     }
 
     let total_shares = msg.shares.iter().sum();
@@ -50,7 +48,6 @@ pub fn map_validate(api: &dyn Api, addrs: &[String]) -> StdResult<Vec<Addr>> {
     addrs.iter().map(|addr| api.addr_validate(&addr)).collect()
 }
 
-// And declare a custom Error variant for the ones where you will want to make use of it
 #[entry_point]
 pub fn execute(
     deps: DepsMut,
@@ -81,38 +78,46 @@ fn execute_release(
         let total_released = TOTAL_RELEASED.load(deps.storage)?;
 
         let balance = deps.querier.query_all_balances(&env.contract.address)?;
-        let native_balance = balance.get(0).unwrap();
-        let total_received = native_balance.amount.checked_add(total_released).unwrap();
-        let denom = native_balance.denom.clone();
+        if let Some(native_balance) = balance.first() {
+            let total_received = native_balance
+                .amount
+                .checked_add(total_released)
+                .map_err(StdError::overflow)?;
+            let denom = native_balance.denom.clone();
 
-        let amount = total_received
-            .checked_mul(Uint128::from(shares))
-            .unwrap()
-            .checked_div(Uint128::from(total_shares))
-            .unwrap()
-            .checked_sub(released)
-            .unwrap();
+            let amount = total_received
+                .checked_mul(Uint128::from(shares))
+                .map_err(StdError::overflow)?
+                .checked_div(Uint128::from(total_shares))
+                .map_err(StdError::divide_by_zero)?
+                .checked_sub(released)
+                .map_err(StdError::overflow)?;
 
-        if amount.is_zero() {
-            return Err(ContractError::NoPaymentDue {});
+            if amount.is_zero() {
+                return Err(ContractError::NoPaymentDue {});
+            }
+
+            RELEASED.update(deps.storage, &account, |_| -> StdResult<_> {
+                released.checked_add(amount).map_err(StdError::overflow)
+            })?;
+            TOTAL_RELEASED.update(deps.storage, |_| -> StdResult<_> {
+                total_released
+                    .checked_add(amount)
+                    .map_err(StdError::overflow)
+            })?;
+
+            let message = BankMsg::Send {
+                to_address: account.to_string(),
+                amount: coins(amount.u128(), denom),
+            };
+
+            let mut res = Response::new();
+            res.add_attribute("action", "approve");
+            res.add_message(message);
+            Ok(res)
+        } else {
+            Err(ContractError::InvalidBalance {})
         }
-
-        RELEASED.update(deps.storage, &account, |released| -> StdResult<_> {
-            Ok(released.unwrap().checked_add(amount).unwrap())
-        })?;
-        TOTAL_RELEASED.update(deps.storage, |_| -> StdResult<_> {
-            Ok(total_released.checked_add(amount).unwrap())
-        })?;
-
-        let message = BankMsg::Send {
-            to_address: account.to_string(),
-            amount: coins(amount.u128(), denom),
-        };
-
-        let mut res = Response::new();
-        res.add_attribute("action", "approve");
-        res.add_message(message);
-        Ok(res)
     }
 }
 
