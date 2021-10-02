@@ -1,5 +1,7 @@
 #  cw-payment-splitter
 
+**NOT PRODUCTION READY**
+
 This [CosmWasm](https://www.cosmwasm.com/) smart contract allows splitting payments across multiple addresses based on the number of shares associated with each address. It takes a list of addresses and a list of shares upon initialization. The funds that the contract instance receives can then be released to an address based on the percentage of shares associated with the address requested.
 
 ### Instantiate
