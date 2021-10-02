@@ -5,10 +5,74 @@
     {
       "type": "object",
       "required": [
-        "get_count"
+        "get_total_shares"
       ],
       "properties": {
-        "get_count": {
+        "get_total_shares": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "get_total_released"
+      ],
+      "properties": {
+        "get_total_released": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "get_shares"
+      ],
+      "properties": {
+        "get_shares": {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "get_released"
+      ],
+      "properties": {
+        "get_released": {
+          "type": "object",
+          "required": [
+            "address"
+          ],
+          "properties": {
+            "address": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "get_payees"
+      ],
+      "properties": {
+        "get_payees": {
           "type": "object"
         }
       },

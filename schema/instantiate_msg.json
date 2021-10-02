@@ -3,12 +3,23 @@
   "title": "InstantiateMsg",
   "type": "object",
   "required": [
-    "count"
+    "payees",
+    "shares"
   ],
   "properties": {
-    "count": {
-      "type": "integer",
-      "format": "int32"
+    "payees": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "shares": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0.0
+      }
     }
   }
 }

@@ -5,30 +5,17 @@
     {
       "type": "object",
       "required": [
-        "increment"
+        "release"
       ],
       "properties": {
-        "increment": {
-          "type": "object"
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "required": [
-        "reset"
-      ],
-      "properties": {
-        "reset": {
+        "release": {
           "type": "object",
           "required": [
-            "count"
+            "address"
           ],
           "properties": {
-            "count": {
-              "type": "integer",
-              "format": "int32"
+            "address": {
+              "type": "string"
             }
           }
         }
