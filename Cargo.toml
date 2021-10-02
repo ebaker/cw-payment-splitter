@@ -1,5 +1,5 @@
 [package]
-name = "cw-splits"
+name = "cw-payment-splitter"
 version = "0.1.0"
 authors = ["Eliot Baker <430383+ebaker@users.noreply.github.com>"]
 edition = "2018"
